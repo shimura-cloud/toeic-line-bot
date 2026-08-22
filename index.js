@@ -11,9 +11,6 @@ const config = {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-// ユーザーごとの出題中問題IDを記憶
-const userCurrentQ = {};
-
 function getUserLevel(correctCount) {
   if (correctCount < 10) return { level: 1, title: "文法見習い 🐣", nextReq: 10 };
   if (correctCount < 30) return { level: 2, title: "Part5 チャレンジャー 🏃", nextReq: 30 };
@@ -41,22 +38,26 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       const userText = event.message.text.trim();
       const userChoice = userText.toUpperCase();
 
-      // -------------------------------------------------------------
-      // 1. 解答処理（A, B, C, D の入力判定）
-      // -------------------------------------------------------------
+      // 1. 解答処理（A, B, C, D）
       if (["A", "B", "C", "D"].includes(userChoice)) {
-        const contentId = userCurrentQ[userId];
+        // Supabaseのセッションテーブルから出題中の問題IDを取得
+        const { data: sessionData } = await supabase
+          .from('user_sessions')
+          .select('current_content_id')
+          .eq('user_id', userId);
+
+        const contentId = sessionData && sessionData.length > 0 ? sessionData[0].current_content_id : null;
 
         if (!contentId) {
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: "まずは「問題」と送信して出題させてください！",
+            text: "出題中の問題がありません。「問題」と送信して挑戦してください！",
             quickReply: getGenreQuickReply()
           });
           continue;
         }
 
-        // DBから出題中の問題データを取得
+        // 問題データを取得
         const { data: resData } = await supabase
           .from('contents')
           .select('*')
@@ -64,10 +65,8 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 
         if (resData && resData.length > 0) {
           const q = resData[0];
-          // DBのカラム名の揺れに対応（correct_choice / answer）
           const rawCorrect = q.correct_choice || q.answer || '';
           const correctChoice = String(rawCorrect).trim().toUpperCase();
-
           const isCorrect = (userChoice === correctChoice);
 
           // ログ保存
@@ -80,6 +79,11 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           } catch (err) {
             console.error("ログ保存エラー:", err);
           }
+
+          // 出題中IDをクリア
+          await supabase
+            .from('user_sessions')
+            .upsert({ user_id: userId, current_content_id: null, updated_at: new Date() });
 
           // 正解数・レベル計算
           const { data: logs } = await supabase
@@ -95,7 +99,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             ? `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
             : `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (最高ランク到達！)`;
 
-          // 解説メッセージ生成
           const explanationText = `${resultMark}\n\n` +
             `${lvlMsg}\n` +
             `------------------------------\n` +
@@ -104,26 +107,16 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             `⚠️ 【罠指摘】\n${q.ai_wrong || 'なし'}\n\n` +
             `🎯 【納得ワンポイント】\n${q.q_convinced || 'なし'}`;
 
-          // 出題中IDをリセット
-          delete userCurrentQ[userId];
-
           await client.replyMessage(event.replyToken, {
             type: 'text',
             text: explanationText,
             quickReply: getGenreQuickReply()
           });
-        } else {
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: "問題データの参照に失敗しました。もう一度「問題」と送信してください。"
-          });
         }
         continue;
       }
 
-      // -------------------------------------------------------------
-      // 2. ジャンル選択メニュー
-      // -------------------------------------------------------------
+      // 2. ジャンル選択
       if (["ジャンル", "メニュー", "カテゴリ"].includes(userText)) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -133,9 +126,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // -------------------------------------------------------------
-      // 3. マイページ機能
-      // -------------------------------------------------------------
+      // 3. マイページ
       if (userText === "マイページ") {
         try {
           const { data: logs } = await supabase
@@ -173,9 +164,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // -------------------------------------------------------------
-      // 4. 出題処理（「問題」または「【ジャンル】〇〇」）
-      // -------------------------------------------------------------
+      // 4. 出題処理
       let targetCategory = null;
       if (userText.startsWith("【ジャンル】")) {
         targetCategory = userText.replace("【ジャンル】", "");
@@ -212,7 +201,11 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         }
 
         const q = candidateQuestions[Math.floor(Math.random() * candidateQuestions.length)];
-        userCurrentQ[userId] = q.id; // 出題中の問題IDを割り当て
+
+        // DBのセッションテーブルに出題中の問題IDを保存
+        await supabase
+          .from('user_sessions')
+          .upsert({ user_id: userId, current_content_id: q.id, updated_at: new Date() });
 
         const msg = `【TOEIC Part5】\n\n` +
           `${q.stem}\n\n` +
@@ -234,9 +227,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // -------------------------------------------------------------
       // 5. デフォルト返信
-      // -------------------------------------------------------------
       await client.replyMessage(event.replyToken, {
         type: 'text',
         text: `「問題」と送信するとTOEIC問題が出題されます！\n「マイページ」や「ジャンル」も試してみてください。`
