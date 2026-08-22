@@ -11,20 +11,12 @@ const config = {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-// Python版と同じメモリ保持辞書
-const userCurrentQ = {};
-
 // --- レベル・称号判定ロジック ---
 function getUserLevel(correctCount) {
-  if (correctCount < 10) {
-    return { level: 1, title: "文法見習い 🐣", nextReq: 10 };
-  } else if (correctCount < 30) {
-    return { level: 2, title: "Part5 チャレンジャー 🏃", nextReq: 30 };
-  } else if (correctCount < 50) {
-    return { level: 3, title: "文法マスター 🎯", nextReq: 50 };
-  } else {
-    return { level: 4, title: "Part5 覇者 👑", nextReq: null };
-  }
+  if (correctCount < 10) return { level: 1, title: "文法見習い 🐣", nextReq: 10 };
+  if (correctCount < 30) return { level: 2, title: "Part5 チャレンジャー 🏃", nextReq: 30 };
+  if (correctCount < 50) return { level: 3, title: "文法マスター 🎯", nextReq: 50 };
+  return { level: 4, title: "Part5 覇者 👑", nextReq: null };
 }
 
 // --- ジャンル選択クイックリプライ ---
@@ -33,11 +25,7 @@ function getGenreQuickReply() {
   return {
     items: genres.map(g => ({
       type: 'action',
-      action: {
-        type: 'message',
-        label: g,
-        text: `【ジャンル】${g}`
-      }
+      action: { type: 'message', label: g, text: `【ジャンル】${g}` }
     }))
   };
 }
@@ -50,82 +38,74 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     if (event.type === 'message' && event.message.type === 'text') {
       const userId = event.source.userId;
       const userText = event.message.text.trim();
-      let userChoice = userText.toUpperCase();
-
+      
       console.log(`📩 受信メッセージ: ${userText}`);
 
-      // 1. 解答処理
-      if (["A", "B", "C", "D"].includes(userChoice) || userText.startsWith("解答:")) {
-        let contentId = null;
+      // 1. 解答処理（「解答:123:A」または「A」「B」「C」「D」）
+      let contentId = null;
+      let userChoice = null;
 
-        if (userText.startsWith("解答:")) {
-          const parts = userText.split(":");
-          if (parts.length >= 3) {
-            contentId = parseInt(parts[1]);
-            userChoice = parts[2].toUpperCase().trim();
-          }
-        } else {
-          contentId = userCurrentQ[userId];
+      if (userText.startsWith("解答:")) {
+        const parts = userText.split(":");
+        if (parts.length >= 3) {
+          contentId = parseInt(parts[1]);
+          userChoice = parts[2].toUpperCase().trim();
         }
+      } else if (["A", "B", "C", "D"].includes(userText.toUpperCase())) {
+        userChoice = userText.toUpperCase();
+        // 万が一、古いUI等で単体のA/B/C/Dが送られた場合のガード
+      }
 
-        if (contentId) {
-          const { data: res } = await supabase
-            .from("contents")
-            .select("*")
-            .eq("id", contentId);
+      if (contentId && userChoice) {
+        const { data: resData } = await supabase
+          .from("contents")
+          .select("*")
+          .eq("id", contentId);
 
-          if (res && res.length > 0) {
-            const q = res[0];
-            const correctChoice = (q.correct_choice || '').toString().trim().toUpperCase();
-            const isCorrect = (userChoice === correctChoice);
+        if (resData && resData.length > 0) {
+          const q = resData[0];
+          const correctChoice = (q.correct_choice || q.answer || '').toString().trim().toUpperCase();
+          const isCorrect = (userChoice === correctChoice);
 
-            // ログ保存
-            try {
-              await supabase.from("user_logs").insert({
-                user_id: userId,
-                content_id: contentId,
-                is_correct: isCorrect
-              });
-            } catch (logErr) {
-              console.log(`⚠️ ログ保存警告: ${logErr}`);
-            }
-
-            // 通算正解数取得
-            const { data: logs } = await supabase
-              .from("user_logs")
-              .select("is_correct")
-              .eq("user_id", userId);
-
-            const totalCorrect = logs ? logs.filter(log => log.is_correct).length : 0;
-            const lvlInfo = getUserLevel(totalCorrect);
-
-            const resultMark = isCorrect ? "⭕ **正解！**" : `❌ **不正解...** (正解: **${q.correct_choice}**)`;
-            
-            let lvlMsg = "";
-            if (lvlInfo.nextReq) {
-              const remain = lvlInfo.nextReq - totalCorrect;
-              lvlMsg = `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (次レベルまであと ${remain} 問正解)`;
-            } else {
-              lvlMsg = `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (最高ランク到達！)`;
-            }
-
-            const explanation = `${resultMark}\n\n` +
-              `${lvlMsg}\n` +
-              `------------------------------\n` +
-              `🧠 **【ハマりポイント】**\n${q.q_doubt || ''}\n\n` +
-              `💡 **【解説】**\n${q.ai_correct || ''}\n\n` +
-              `⚠️ **【罠指摘】**\n${q.ai_wrong || ''}\n\n` +
-              `🎯 **【納得ワンポイント】**\n${q.q_convinced || ''}`;
-
-            delete userCurrentQ[userId];
-
-            await client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: explanation,
-              quickReply: getGenreQuickReply()
+          // ログ保存
+          try {
+            await supabase.from("user_logs").insert({
+              user_id: userId,
+              content_id: contentId,
+              is_correct: isCorrect
             });
-            continue;
+          } catch (logErr) {
+            console.log(`⚠️ ログ保存警告: ${logErr}`);
           }
+
+          // 通算正解数取得 & レベル計算
+          const { data: logs } = await supabase
+            .from("user_logs")
+            .select("is_correct")
+            .eq("user_id", userId);
+
+          const totalCorrect = logs ? logs.filter(log => log.is_correct).length : 0;
+          const lvlInfo = getUserLevel(totalCorrect);
+
+          const resultMark = isCorrect ? "⭕ **正解！**" : `❌ **不正解...** (正解: **${correctChoice}**)`;
+          const lvlMsg = lvlInfo.nextReq 
+            ? `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
+            : `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (最高ランク到達！)`;
+
+          const explanation = `${resultMark}\n\n` +
+            `${lvlMsg}\n` +
+            `------------------------------\n` +
+            `🧠 **【ハマりポイント】**\n${q.q_doubt || ''}\n\n` +
+            `💡 **【解説】**\n${q.ai_correct || q.explanation || ''}\n\n` +
+            `⚠️ **【罠指摘】**\n${q.ai_wrong || ''}\n\n` +
+            `🎯 **【納得ワンポイント】**\n${q.q_convinced || ''}`;
+
+          await client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: explanation,
+            quickReply: getGenreQuickReply()
+          });
+          continue;
         }
       }
 
@@ -156,11 +136,8 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const total = logs.length;
             const correctCount = logs.filter(log => log.is_correct).length;
             const accuracy = ((correctCount / total) * 100).toFixed(1);
-
             const lvlInfo = getUserLevel(correctCount);
-            const nextStr = lvlInfo.nextReq 
-              ? `あと ${lvlInfo.nextReq - correctCount} 問正解でレベルアップ！` 
-              : "最高ランクに到達済みです！";
+            const nextStr = lvlInfo.nextReq ? `あと ${lvlInfo.nextReq - correctCount} 問正解でレベルアップ！` : "最高ランクに到達済みです！";
 
             const replyText = `👤 **【あなたの学習ステータス】**\n\n` +
               `🎖️ **称号**: ${lvlInfo.title}\n` +
@@ -172,16 +149,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
               `🎯 全体正解率: ${accuracy} %\n\n` +
               `「ジャンル」から苦手分野を選んでどんどんレベルを上げましょう！`;
 
-            await client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: replyText
-            });
+            await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
           }
         } catch (e) {
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: "マイページデータの読み込みに失敗しました。"
-          });
+          await client.replyMessage(event.replyToken, { type: 'text', text: "マイページデータの読み込みに失敗しました。" });
         }
         continue;
       }
@@ -193,9 +164,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       }
 
       if (userText === "問題" || targetCategory) {
-        const { data: contentsRes } = await supabase
-          .from("contents")
-          .select("*");
+        const { data: contentsRes } = await supabase.from("contents").select("*");
 
         if (!contentsRes || contentsRes.length === 0) {
           await client.replyMessage(event.replyToken, {
@@ -228,9 +197,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           candidateQuestions = contentsRes;
         }
 
-        // ランダム選定
         const q = candidateQuestions[Math.floor(Math.random() * candidateQuestions.length)];
-        userCurrentQ[userId] = q.id;
 
         const msg = `【TOEIC Part5】\n\n` +
           `${q.stem}\n\n` +
@@ -239,12 +206,13 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           `(C) ${q.choice_c}\n` +
           `(D) ${q.choice_d}`;
 
+        // 🌟 ボタン裏の送信テキストに「解答:問題ID:選択肢」を埋め込む（ステートレス化）
         const ansItems = ["A", "B", "C", "D"].map(opt => ({
           type: 'action',
           action: {
             type: 'message',
             label: opt,
-            text: opt
+            text: `解答:${q.id}:${opt}`
           }
         }));
 
@@ -255,6 +223,12 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         });
         continue;
       }
+
+      // 5. デフォルト返信
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `「問題」と送信するとTOEIC問題が出題されます！\n「マイページ」や「ジャンル」も試してみてください。`
+      });
     }
   }
   res.status(200).end();
