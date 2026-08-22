@@ -16,31 +16,43 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   const client = new line.Client(config);
 
   for (let event of events) {
-    if (event.type === 'message' && event.message.type === 'text') {      
-      const { data, error } = await supabase
-        .from('contents')
-        .select('*')
-        .limit(1);
+    if (event.type === 'message' && event.message.type === 'text') {
+      const userText = event.message.text.trim().toUpperCase();
 
-      let replyText = "エラーが発生しました。";
+      // 「問題」または「NEXT」と送られた場合のみ新しい問題を出す
+      if (userText === '問題' || userText === 'NEXT' || userText === 'スタート') {
+        const { data, error } = await supabase
+          .from('contents')
+          .select('*')
+          .limit(1);
 
-      if (data && data.length > 0) {
-        const q = data[0];
-        replyText = `【${q.title || 'TOEIC問題'}】\n\n` +
-                    `${q.stem}\n\n` +
-                    `(A) ${q.choice_a}\n` +
-                    `(B) ${q.choice_b}\n` +
-                    `(C) ${q.choice_c}\n` +
-                    `(D) ${q.choice_d}\n\n` +
-                    `---------------\n` +
-                    `【正解】${q.answer}\n\n` +
-                    `【解説】\n${q.explanation || '解説はありません。'}`;
+        let replyText = "問題データの取得に失敗しました。";
+
+        if (data && data.length > 0) {
+          const q = data[0];
+          // DBのカラム名がゆれていても取得できるようにフォールバックを設定
+          const ans = q.answer || q.correct_answer || q.ans || "未設定";
+          const exp = q.explanation || q.commentary || q.exp || q.rule_desc || "解説はありません。";
+
+          replyText = `【${q.title || 'TOEIC問題'}】\n\n` +
+                      `${q.stem}\n\n` +
+                      `(A) ${q.choice_a}\n` +
+                      `(B) ${q.choice_b}\n` +
+                      `(C) ${q.choice_c}\n` +
+                      `(D) ${q.choice_d}\n\n` +
+                      `---------------\n` +
+                      `【正解】${ans}\n\n` +
+                      `【解説】\n${exp}`;
+        }
+
+        await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
+      } else {
+        // A, B, C, D など他の文字が送られた時の案内メッセージ
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `「${event.message.text}」を受け取りました。\n次の問題を解く場合は「問題」と送信してください！`
+        });
       }
-
-      await client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: replyText
-      });
     }
   }
   res.status(200).end();
