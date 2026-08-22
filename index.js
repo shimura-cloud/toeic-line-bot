@@ -37,42 +37,39 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       const userId = event.source.userId;
       const userText = event.message.text.trim();
 
-      console.log(`📩 受信メッセージ: ${userText}`);
-
-      // 1. 解答処理（「解答:ID:選択肢」形式）
+      // 1. 解答処理
       if (userText.startsWith("解答:")) {
         const parts = userText.split(":");
         const contentId = parts[1];
         const userChoice = parts[2] ? parts[2].toUpperCase().trim() : '';
 
-        if (contentId && contentId !== 'undefined' && userChoice) {
-          const { data: resData } = await supabase
-            .from("contents")
-            .select("*")
-            .eq("id", contentId);
+        if (contentId && userChoice) {
+          // ID指定で検索、見つからなければ全件取得から照合
+          let q = null;
+          const { data: idRes } = await supabase.from("contents").select("*").eq("id", contentId);
+          
+          if (idRes && idRes.length > 0) {
+            q = idRes[0];
+          } else {
+            const { data: allRes } = await supabase.from("contents").select("*");
+            if (allRes) q = allRes.find(item => String(item.id) === String(contentId) || String(item.stem) === String(contentId));
+          }
 
-          if (resData && resData.length > 0) {
-            const q = resData[0];
+          if (q) {
             const correctChoice = (q.correct_choice || q.answer || '').toString().trim().toUpperCase();
             const isCorrect = (userChoice === correctChoice);
 
-            // ログ保存
             try {
               await supabase.from("user_logs").insert({
                 user_id: userId,
-                content_id: parseInt(contentId),
+                content_id: q.id || 0,
                 is_correct: isCorrect
               });
             } catch (logErr) {
               console.log(`⚠️ ログ保存警告: ${logErr}`);
             }
 
-            // 正解数＆レベル計算
-            const { data: logs } = await supabase
-              .from("user_logs")
-              .select("is_correct")
-              .eq("user_id", userId);
-
+            const { data: logs } = await supabase.from("user_logs").select("is_correct").eq("user_id", userId);
             const totalCorrect = logs ? logs.filter(log => log.is_correct).length : 0;
             const lvlInfo = getUserLevel(totalCorrect);
 
@@ -99,7 +96,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         }
       }
 
-      // 2. ジャンル選択メニュー
+      // 2. ジャンル選択
       if (["ジャンル", "メニュー", "カテゴリ"].includes(userText)) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -112,10 +109,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       // 3. マイページ
       if (userText === "マイページ") {
         try {
-          const { data: logs } = await supabase
-            .from("user_logs")
-            .select("is_correct")
-            .eq("user_id", userId);
+          const { data: logs } = await supabase.from("user_logs").select("is_correct").eq("user_id", userId);
 
           if (!logs || logs.length === 0) {
             await client.replyMessage(event.replyToken, {
@@ -164,19 +158,13 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           continue;
         }
 
-        let candidateQuestions = [];
+        let candidateQuestions = contentsRes;
         if (targetCategory && targetCategory !== "弱点克服モード") {
           try {
-            const { data: rulesRes } = await supabase
-              .from("rules")
-              .select("rule_id, category")
-              .eq("category", targetCategory);
-
+            const { data: rulesRes } = await supabase.from("rules").select("rule_id, category").eq("category", targetCategory);
             if (rulesRes && rulesRes.length > 0) {
               const targetRuleIds = rulesRes.map(r => (r.rule_id || '').trim().toUpperCase());
-              candidateQuestions = contentsRes.filter(q => 
-                targetRuleIds.includes((q.rule_id || '').trim().toUpperCase())
-              );
+              candidateQuestions = contentsRes.filter(q => targetRuleIds.includes((q.rule_id || '').trim().toUpperCase()));
             }
           } catch (catErr) {
             console.log(`⚠️ カテゴリ絞り込み警告: ${catErr}`);
@@ -189,8 +177,8 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 
         const q = candidateQuestions[Math.floor(Math.random() * candidateQuestions.length)];
 
-        // カラム名が id / ID / content_id のどれでも取得できるようにフォールバック
-        const realId = q.id || q.ID || q.content_id;
+        // IDが存在しない場合はstem（問題文）を識別キーとして利用
+        const targetId = q.id !== undefined && q.id !== null ? q.id : encodeURIComponent(q.stem);
 
         const msg = `【TOEIC Part5】\n\n` +
           `${q.stem}\n\n` +
@@ -204,7 +192,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           action: {
             type: 'message',
             label: opt,
-            text: `解答:${realId}:${opt}`
+            text: `解答:${targetId}:${opt}`
           }
         }));
 
