@@ -187,12 +187,14 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           `(C) ${q.choice_c}\n` +
           `(D) ${q.choice_d}`;
 
+        // 🌟 displayTextを追加してLINE画面上には「A」「B」等の綺麗な選択肢だけを表示させる
         const ansItems = ["A", "B", "C", "D"].map(opt => ({
           type: 'action',
           action: {
             type: 'message',
             label: opt,
-            text: `解答:${targetId}:${opt}`
+            text: `解答:${targetId}:${opt}`,
+            displayText: opt
           }
         }));
 
