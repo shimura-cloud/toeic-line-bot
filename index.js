@@ -72,18 +72,18 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const totalCorrect = logs ? logs.filter(log => log.is_correct).length : 0;
             const lvlInfo = getUserLevel(totalCorrect);
 
-            const resultMark = isCorrect ? "⭕ **正解！**" : `❌ **不正解...** (正解: **${correctChoice}**)`;
+            const resultMark = isCorrect ? "⭕ 正解！" : `❌ 不正解... (正解: ${correctChoice})`;
             const lvlMsg = lvlInfo.nextReq 
-              ? `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
-              : `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (最高ランク到達！)`;
+              ? `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
+              : `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (最高ランク到達！)`;
 
             const explanation = `${resultMark}\n\n` +
               `${lvlMsg}\n` +
               `------------------------------\n` +
-              `🧠 **【ハマりポイント】**\n${q.q_doubt || ''}\n\n` +
-              `💡 **【解説】**\n${q.ai_correct || q.explanation || ''}\n\n` +
-              `⚠️ **【罠指摘】**\n${q.ai_wrong || ''}\n\n` +
-              `🎯 **【納得ワンポイント】**\n${q.q_convinced || ''}`;
+              `🧠 【ハマりポイント】\n${q.q_doubt || ''}\n\n` +
+              `💡 【解説】\n${q.ai_correct || q.explanation || ''}\n\n` +
+              `⚠️ 【罠指摘】\n${q.ai_wrong || ''}\n\n` +
+              `🎯 【納得ワンポイント】\n${q.q_convinced || ''}`;
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
@@ -127,10 +127,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const lvlInfo = getUserLevel(correctCount);
             const nextStr = lvlInfo.nextReq ? `あと ${lvlInfo.nextReq - correctCount} 問正解でレベルアップ！` : "最高ランクに到達済みです！";
 
-            const replyText = `👤 **【あなたの学習ステータス】**\n\n` +
-              `🎖️ **称号**: ${lvlInfo.title}\n` +
-              `⭐ **レベル**: Lv.${lvlInfo.level}\n` +
-              `🚀 **進捗**: ${nextStr}\n\n` +
+            const replyText = `👤 【あなたの学習ステータス】\n\n` +
+              `🎖️ 称号: ${lvlInfo.title}\n` +
+              `⭐ レベル: Lv.${lvlInfo.level}\n` +
+              `🚀 進捗: ${nextStr}\n\n` +
               `------------------------------\n` +
               `📝 総解答数: ${total} 問\n` +
               `⭕ 正解数: ${correctCount} 問\n` +
