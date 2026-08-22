@@ -33,18 +33,17 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   const client = new line.Client(config);
 
   for (let event of events) {
-    if (event.type === 'message' && event.message.type === 'text') {
-      const userId = event.source.userId;
-      const userText = event.message.text.trim();
+    const userId = event.source.userId;
 
-      // 1. 解答処理
-      if (userText.startsWith("解答:")) {
-        const parts = userText.split(":");
+    // A. ポストバックイベント（ボタンタップ時の裏側処理）
+    if (event.type === 'postback') {
+      const dataStr = event.postback.data; // 例: "解答:42:C"
+      if (dataStr.startsWith("解答:")) {
+        const parts = dataStr.split(":");
         const contentId = parts[1];
         const userChoice = parts[2] ? parts[2].toUpperCase().trim() : '';
 
         if (contentId && userChoice) {
-          // ID指定で検索、見つからなければ全件取得から照合
           let q = null;
           const { data: idRes } = await supabase.from("contents").select("*").eq("id", contentId);
           
@@ -95,8 +94,13 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           }
         }
       }
+    }
 
-      // 2. ジャンル選択
+    // B. テキストメッセージイベント
+    if (event.type === 'message' && event.message.type === 'text') {
+      const userText = event.message.text.trim();
+
+      // 1. ジャンル選択
       if (["ジャンル", "メニュー", "カテゴリ"].includes(userText)) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -106,7 +110,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 3. マイページ
+      // 2. マイページ
       if (userText === "マイページ") {
         try {
           const { data: logs } = await supabase.from("user_logs").select("is_correct").eq("user_id", userId);
@@ -141,7 +145,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 4. 出題処理
+      // 3. 出題処理
       let targetCategory = null;
       if (userText.startsWith("【ジャンル】")) {
         targetCategory = userText.replace("【ジャンル】", "");
@@ -176,8 +180,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         }
 
         const q = candidateQuestions[Math.floor(Math.random() * candidateQuestions.length)];
-
-        // IDが存在しない場合はstem（問題文）を識別キーとして利用
         const targetId = q.id !== undefined && q.id !== null ? q.id : encodeURIComponent(q.stem);
 
         const msg = `【TOEIC Part5】\n\n` +
@@ -187,13 +189,13 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           `(C) ${q.choice_c}\n` +
           `(D) ${q.choice_d}`;
 
-        // 🌟 displayTextを追加してLINE画面上には「A」「B」等の綺麗な選択肢だけを表示させる
+        // PostbackActionを使用：画面にはA,B,C,Dのみ表示、data属性でIDと選択肢を送信
         const ansItems = ["A", "B", "C", "D"].map(opt => ({
           type: 'action',
           action: {
-            type: 'message',
+            type: 'postback',
             label: opt,
-            text: `解答:${targetId}:${opt}`,
+            data: `解答:${targetId}:${opt}`,
             displayText: opt
           }
         }));
@@ -206,7 +208,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 5. デフォルト返信
+      // 4. デフォルト返信
       await client.replyMessage(event.replyToken, {
         type: 'text',
         text: `「問題」と送信するとTOEIC問題が出題されます！\n「マイページ」や「ジャンル」も試してみてください。`
