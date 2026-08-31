@@ -35,9 +35,54 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   for (let event of events) {
     const userId = event.source.userId;
 
-    // A. ポストバックイベント（ボタンタップ時の裏側処理）
+    // A. ポストバックイベント（ボタンタップ処理）
     if (event.type === 'postback') {
-      const dataStr = event.postback.data; // 例: "解答:42:C"
+      const dataStr = event.postback.data;
+
+      // 1. リセット実行処理
+      if (dataStr === 'ACTION_CONFIRM_RESET') {
+        try {
+          // 現在のログを取得
+          const { data: currentLogs } = await supabase
+            .from("user_logs")
+            .select("*")
+            .eq("user_id", userId);
+
+          if (currentLogs && currentLogs.length > 0) {
+            // アーカイブテーブルへ保存
+            const archiveData = currentLogs.map(log => ({
+              user_id: log.user_id,
+              content_id: log.content_id,
+              is_correct: log.is_correct,
+              reset_at: new Date()
+            }));
+
+            await supabase.from("archived_logs").insert(archiveData);
+
+            // 現在のログを削除
+            await supabase.from("user_logs").delete().eq("user_id", userId);
+
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: "これまでの解答履歴を保存し、ステータスをリセットしました！\n新たな気持ちで「問題」と送ってスタートしましょう 🚀"
+            });
+          } else {
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: "リセット対象の学習データがありません。"
+            });
+          }
+        } catch (err) {
+          console.error("リセット処理エラー:", err);
+          await client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: "リセット処理中にエラーが発生しました。"
+          });
+        }
+        continue;
+      }
+
+      // 2. 問題の解答処理
       if (dataStr.startsWith("解答:")) {
         const parts = dataStr.split(":");
         const contentId = parts[1];
@@ -72,18 +117,18 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const totalCorrect = logs ? logs.filter(log => log.is_correct).length : 0;
             const lvlInfo = getUserLevel(totalCorrect);
 
-            const resultMark = isCorrect ? "⭕ 正解！" : `❌ 不正解... (正解: ${correctChoice})`;
+            const resultMark = isCorrect ? "⭕ **正解！**" : `❌ **不正解...** (正解: **${correctChoice}**)`;
             const lvlMsg = lvlInfo.nextReq 
-              ? `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
-              : `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (最高ランク到達！)`;
+              ? `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
+              : `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (最高ランク到達！)`;
 
             const explanation = `${resultMark}\n\n` +
               `${lvlMsg}\n` +
               `------------------------------\n` +
-              `🧠 【ハマりポイント】\n${q.q_doubt || ''}\n\n` +
-              `💡 【解説】\n${q.ai_correct || q.explanation || ''}\n\n` +
-              `⚠️ 【罠指摘】\n${q.ai_wrong || ''}\n\n` +
-              `🎯 【納得ワンポイント】\n${q.q_convinced || ''}`;
+              `🧠 **【ハマりポイント】**\n${q.q_doubt || ''}\n\n` +
+              `💡 **【解説】**\n${q.ai_correct || q.explanation || ''}\n\n` +
+              `⚠️ **【罠指摘】**\n${q.ai_wrong || ''}\n\n` +
+              `🎯 **【納得ワンポイント】**\n${q.q_convinced || ''}`;
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
@@ -100,7 +145,29 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     if (event.type === 'message' && event.message.type === 'text') {
       const userText = event.message.text.trim();
 
-      // 1. ジャンル選択
+      // 1. リセット確認コマンド
+      if (userText === "リセット") {
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: "⚠️ **学習データのリセット**\n\nこれまでの解答履歴を保存（アーカイブ）し、レベルや進捗をLv.1に戻しますか？",
+          quickReply: {
+            items: [
+              {
+                type: 'action',
+                action: {
+                  type: 'postback',
+                  label: '実行する',
+                  data: 'ACTION_CONFIRM_RESET',
+                  displayText: 'リセットを実行する'
+                }
+              }
+            ]
+          }
+        });
+        continue;
+      }
+
+      // 2. ジャンル選択
       if (["ジャンル", "メニュー", "カテゴリ"].includes(userText)) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -110,7 +177,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 2. マイページ
+      // 3. マイページ
       if (userText === "マイページ") {
         try {
           const { data: logs } = await supabase.from("user_logs").select("is_correct").eq("user_id", userId);
@@ -127,10 +194,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const lvlInfo = getUserLevel(correctCount);
             const nextStr = lvlInfo.nextReq ? `あと ${lvlInfo.nextReq - correctCount} 問正解でレベルアップ！` : "最高ランクに到達済みです！";
 
-            const replyText = `👤 【あなたの学習ステータス】\n\n` +
-              `🎖️ 称号: ${lvlInfo.title}\n` +
-              `⭐ レベル: Lv.${lvlInfo.level}\n` +
-              `🚀 進捗: ${nextStr}\n\n` +
+            const replyText = `👤 **【あなたの学習ステータス】**\n\n` +
+              `🎖️ **称号**: ${lvlInfo.title}\n` +
+              `⭐ **レベル**: Lv.${lvlInfo.level}\n` +
+              `🚀 **進捗**: ${nextStr}\n\n` +
               `------------------------------\n` +
               `📝 総解答数: ${total} 問\n` +
               `⭕ 正解数: ${correctCount} 問\n` +
@@ -145,7 +212,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 3. 出題処理
+      // 4. 出題処理
       let targetCategory = null;
       if (userText.startsWith("【ジャンル】")) {
         targetCategory = userText.replace("【ジャンル】", "");
@@ -189,7 +256,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           `(C) ${q.choice_c}\n` +
           `(D) ${q.choice_d}`;
 
-        // PostbackActionを使用：画面にはA,B,C,Dのみ表示、data属性でIDと選択肢を送信
         const ansItems = ["A", "B", "C", "D"].map(opt => ({
           type: 'action',
           action: {
@@ -208,10 +274,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 4. デフォルト返信
+      // 5. デフォルト返信
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: `「問題」と送信するとTOEIC問題が出題されます！\n「マイページ」や「ジャンル」も試してみてください。`
+        text: `「問題」と送信するとTOEIC問題が出題されます！\n「マイページ」や「ジャンル」、「リセット」も試してみてください。`
       });
     }
   }
