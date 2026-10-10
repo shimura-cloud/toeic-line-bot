@@ -18,8 +18,20 @@ function getUserLevel(correctCount) {
   return { level: 4, title: "Part5 覇者 👑", nextReq: null };
 }
 
+// 既存の6ジャンル ＋ 新規3ジャンルをすべて統合！
 function getGenreQuickReply() {
-  const genres = ["品詞識別", "動詞・時制", "代名詞", "接続詞・前置詞", "語彙・コロケーション", "分詞・関係詞・比較", "弱点克服モード"];
+  const genres = [
+    "品詞識別", 
+    "動詞・時制", 
+    "代名詞", 
+    "接続詞・前置詞", 
+    "語彙・コロケーション", 
+    "分詞・関係詞・比較", 
+    "文型・文構造", 
+    "語彙・同意語", 
+    "語彙・言い換え", 
+    "弱点克服モード"
+  ];
   return {
     items: genres.map(g => ({
       type: 'action',
@@ -42,14 +54,12 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       // 1. リセット実行処理
       if (dataStr === 'ACTION_CONFIRM_RESET') {
         try {
-          // 現在のログを取得
           const { data: currentLogs } = await supabase
             .from("user_logs")
             .select("*")
             .eq("user_id", userId);
 
           if (currentLogs && currentLogs.length > 0) {
-            // アーカイブテーブルへ保存
             const archiveData = currentLogs.map(log => ({
               user_id: log.user_id,
               content_id: log.content_id,
@@ -58,8 +68,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             }));
 
             await supabase.from("archived_logs").insert(archiveData);
-
-            // 現在のログを削除
             await supabase.from("user_logs").delete().eq("user_id", userId);
 
             await client.replyMessage(event.replyToken, {
@@ -100,7 +108,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           }
 
           if (q) {
-            const correctChoice = (q.correct_choice || q.answer || '').toString().trim().toUpperCase();
+            const correctChoice = (q.correct_choice || q.correct_ch || q.answer || '').toString().trim().toUpperCase();
             const isCorrect = (userChoice === correctChoice);
 
             try {
@@ -122,17 +130,26 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
               ? `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
               : `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (最高ランク到達！)`;
 
-            const explanation = `${resultMark}\n\n` +
+            let explanation = `${resultMark}\n\n` +
               `${lvlMsg}\n` +
-              `------------------------------\n` +
-              `🧠 **【ハマりポイント】**\n${q.q_doubt || ''}\n\n` +
-              `💡 **【解説】**\n${q.ai_correct || q.explanation || ''}\n\n` +
-              `⚠️ **【罠指摘】**\n${q.ai_wrong || ''}\n\n` +
-              `🎯 **【納得ワンポイント】**\n${q.q_convinced || ''}`;
+              `------------------------------\n`;
+
+            if (q.q_doubt) {
+              explanation += `🧠 **【ハマりポイント】**\n${q.q_doubt}\n\n`;
+            }
+            if (q.ai_correct || q.explanation) {
+              explanation += `💡 **【解説】**\n${q.ai_correct || q.explanation}\n\n`;
+            }
+            if (q.ai_wrong) {
+              explanation += `⚠️ **【罠指摘】**\n${q.ai_wrong}\n\n`;
+            }
+            if (q.q_convinced) {
+              explanation += `🎯 **【納得ワンポイント】**\n${q.q_convinced}`;
+            }
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: explanation,
+              text: explanation.trim(),
               quickReply: getGenreQuickReply()
             });
             continue;
@@ -230,15 +247,24 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         }
 
         let candidateQuestions = contentsRes;
+        
         if (targetCategory && targetCategory !== "弱点克服モード") {
-          try {
-            const { data: rulesRes } = await supabase.from("rules").select("rule_id, category").eq("category", targetCategory);
-            if (rulesRes && rulesRes.length > 0) {
-              const targetRuleIds = rulesRes.map(r => (r.rule_id || '').trim().toUpperCase());
-              candidateQuestions = contentsRes.filter(q => targetRuleIds.includes((q.rule_id || '').trim().toUpperCase()));
+          const newCategories = ["文型・文構造", "語彙・同意語", "語彙・言い換え"];
+          
+          if (newCategories.includes(targetCategory)) {
+            // ★ 新規追加の3ジャンルの場合は category_name で絞り込み
+            candidateQuestions = contentsRes.filter(q => q.category_name === targetCategory);
+          } else {
+            // ★ 既存の6ジャンルの場合は rules テーブル参照で絞り込み（旧ロジックを維持！）
+            try {
+              const { data: rulesRes } = await supabase.from("rules").select("rule_id, category").eq("category", targetCategory);
+              if (rulesRes && rulesRes.length > 0) {
+                const targetRuleIds = rulesRes.map(r => (r.rule_id || '').trim().toUpperCase());
+                candidateQuestions = contentsRes.filter(q => targetRuleIds.includes((q.rule_id || '').trim().toUpperCase()));
+              }
+            } catch (catErr) {
+              console.log(`⚠️ カテゴリ絞り込み警告: ${catErr}`);
             }
-          } catch (catErr) {
-            console.log(`⚠️ カテゴリ絞り込み警告: ${catErr}`);
           }
         }
 
