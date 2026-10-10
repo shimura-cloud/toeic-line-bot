@@ -11,6 +11,14 @@ const config = {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
+// 改行文字（\n 文字列）を実際の改行に変換し、余分な ** も除去するヘルパー関数
+function formatText(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\\n/g, '\n')
+    .replace(/\*\*/g, '');
+}
+
 function getUserLevel(correctCount) {
   if (correctCount < 10) return { level: 1, title: "文法見習い 🐣", nextReq: 10 };
   if (correctCount < 30) return { level: 2, title: "Part5 チャレンジャー 🏃", nextReq: 30 };
@@ -18,7 +26,7 @@ function getUserLevel(correctCount) {
   return { level: 4, title: "Part5 覇者 👑", nextReq: null };
 }
 
-// 既存の6ジャンル ＋ 新規3ジャンルをすべて統合！
+// 既存の6ジャンル ＋ 新規3ジャンルを統合
 function getGenreQuickReply() {
   const genres = [
     "品詞識別", 
@@ -125,26 +133,26 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const totalCorrect = logs ? logs.filter(log => log.is_correct).length : 0;
             const lvlInfo = getUserLevel(totalCorrect);
 
-            const resultMark = isCorrect ? "⭕ **正解！**" : `❌ **不正解...** (正解: **${correctChoice}**)`;
+            const resultMark = isCorrect ? "⭕ 正解！" : `❌ 不正解... (正解: ${correctChoice})`;
             const lvlMsg = lvlInfo.nextReq 
-              ? `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
-              : `🏆 **Lv.${lvlInfo.level} [${lvlInfo.title}]** (最高ランク到達！)`;
+              ? `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (次レベルまであと ${lvlInfo.nextReq - totalCorrect} 問正解)`
+              : `🏆 Lv.${lvlInfo.level} [${lvlInfo.title}] (最高ランク到達！)`;
 
             let explanation = `${resultMark}\n\n` +
               `${lvlMsg}\n` +
               `------------------------------\n`;
 
             if (q.q_doubt) {
-              explanation += `🧠 **【ハマりポイント】**\n${q.q_doubt}\n\n`;
+              explanation += `🧠【間違いやすいポイント】\n${formatText(q.q_doubt)}\n\n`;
             }
             if (q.ai_correct || q.explanation) {
-              explanation += `💡 **【解説】**\n${q.ai_correct || q.explanation}\n\n`;
+              explanation += `💡【解説】\n${formatText(q.ai_correct || q.explanation)}\n\n`;
             }
             if (q.ai_wrong) {
-              explanation += `⚠️ **【罠指摘】**\n${q.ai_wrong}\n\n`;
+              explanation += `⚠️【よくある間違い】\n${formatText(q.ai_wrong)}\n\n`;
             }
             if (q.q_convinced) {
-              explanation += `🎯 **【納得ワンポイント】**\n${q.q_convinced}`;
+              explanation += `🎯【解法のコツ】\n${formatText(q.q_convinced)}`;
             }
 
             await client.replyMessage(event.replyToken, {
@@ -166,7 +174,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       if (userText === "リセット") {
         await client.replyMessage(event.replyToken, {
           type: 'text',
-          text: "⚠️ **学習データのリセット**\n\nこれまでの解答履歴を保存（アーカイブ）し、レベルや進捗をLv.1に戻しますか？",
+          text: "⚠️【学習データのリセット】\n\nこれまでの解答履歴を保存（アーカイブ）し、レベルや進捗をLv.1に戻しますか？",
           quickReply: {
             items: [
               {
@@ -211,10 +219,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
             const lvlInfo = getUserLevel(correctCount);
             const nextStr = lvlInfo.nextReq ? `あと ${lvlInfo.nextReq - correctCount} 問正解でレベルアップ！` : "最高ランクに到達済みです！";
 
-            const replyText = `👤 **【あなたの学習ステータス】**\n\n` +
-              `🎖️ **称号**: ${lvlInfo.title}\n` +
-              `⭐ **レベル**: Lv.${lvlInfo.level}\n` +
-              `🚀 **進捗**: ${nextStr}\n\n` +
+            const replyText = `👤【あなたの学習ステータス】\n\n` +
+              `🎖️ 称号: ${lvlInfo.title}\n` +
+              `⭐ レベル: Lv.${lvlInfo.level}\n` +
+              `🚀 進捗: ${nextStr}\n\n` +
               `------------------------------\n` +
               `📝 総解答数: ${total} 問\n` +
               `⭕ 正解数: ${correctCount} 問\n` +
@@ -252,10 +260,8 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           const newCategories = ["文型・文構造", "語彙・同意語", "語彙・言い換え"];
           
           if (newCategories.includes(targetCategory)) {
-            // ★ 新規追加の3ジャンルの場合は category_name で絞り込み
             candidateQuestions = contentsRes.filter(q => q.category_name === targetCategory);
           } else {
-            // ★ 既存の6ジャンルの場合は rules テーブル参照で絞り込み（旧ロジックを維持！）
             try {
               const { data: rulesRes } = await supabase.from("rules").select("rule_id, category").eq("category", targetCategory);
               if (rulesRes && rulesRes.length > 0) {
@@ -276,11 +282,11 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         const targetId = q.id !== undefined && q.id !== null ? q.id : encodeURIComponent(q.stem);
 
         const msg = `【TOEIC Part5】\n\n` +
-          `${q.stem}\n\n` +
-          `(A) ${q.choice_a}\n` +
-          `(B) ${q.choice_b}\n` +
-          `(C) ${q.choice_c}\n` +
-          `(D) ${q.choice_d}`;
+          `${formatText(q.stem)}\n\n` +
+          `(A) ${formatText(q.choice_a)}\n` +
+          `(B) ${formatText(q.choice_b)}\n` +
+          `(C) ${formatText(q.choice_c)}\n` +
+          `(D) ${formatText(q.choice_d)}`;
 
         const ansItems = ["A", "B", "C", "D"].map(opt => ({
           type: 'action',
