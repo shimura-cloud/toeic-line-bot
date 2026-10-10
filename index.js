@@ -26,7 +26,7 @@ function getUserLevel(correctCount) {
   return { level: 4, title: "Part5 覇者 👑", nextReq: null };
 }
 
-// 既存の6ジャンル ＋ 新規3ジャンルを統合
+// 既存の6ジャンル ＋ 新規3ジャンル ＋ 弱点克服モード
 function getGenreQuickReply() {
   const genres = [
     "品詞識別", 
@@ -237,7 +237,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // 4. 出題処理
+      // 4. 出題処理（弱点克服モード対応）
       let targetCategory = null;
       if (userText.startsWith("【ジャンル】")) {
         targetCategory = userText.replace("【ジャンル】", "");
@@ -255,8 +255,36 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         }
 
         let candidateQuestions = contentsRes;
+        let isWeakMode = false;
         
-        if (targetCategory && targetCategory !== "弱点克服モード") {
+        if (targetCategory === "弱点克服モード") {
+          // ★ 弱点克服モード: ユーザーが過去に間違えた問題（is_correct = false）を抽出
+          try {
+            const { data: wrongLogs } = await supabase
+              .from("user_logs")
+              .select("content_id")
+              .eq("user_id", userId)
+              .eq("is_correct", false);
+
+            if (wrongLogs && wrongLogs.length > 0) {
+              const wrongIds = wrongLogs.map(l => String(l.content_id));
+              candidateQuestions = contentsRes.filter(q => wrongIds.includes(String(q.id)));
+              isWeakMode = true;
+            }
+          } catch (weakErr) {
+            console.log(`⚠️ 弱点ログ取得エラー: ${weakErr}`);
+          }
+
+          // 弱点問題がない場合
+          if (!isWeakMode || candidateQuestions.length === 0) {
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: "🎯【弱点克服モード】\n\n現在、克服すべき間違えた問題はありません！素晴らしい成果です👏\n通常モードでどんどん新しい問題に挑戦しましょう！",
+              quickReply: getGenreQuickReply()
+            });
+            continue;
+          }
+        } else if (targetCategory) {
           const newCategories = ["文型・文構造", "語彙・同意語", "語彙・言い換え"];
           
           if (newCategories.includes(targetCategory)) {
@@ -281,7 +309,9 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         const q = candidateQuestions[Math.floor(Math.random() * candidateQuestions.length)];
         const targetId = q.id !== undefined && q.id !== null ? q.id : encodeURIComponent(q.stem);
 
-        const msg = `【TOEIC Part5】\n\n` +
+        const headerTitle = isWeakMode ? "【弱点克服モード 🎯】" : "【TOEIC Part5】";
+
+        const msg = `${headerTitle}\n\n` +
           `${formatText(q.stem)}\n\n` +
           `(A) ${formatText(q.choice_a)}\n` +
           `(B) ${formatText(q.choice_b)}\n` +
